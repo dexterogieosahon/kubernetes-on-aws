@@ -81,6 +81,10 @@ SenzaComponents:
          Maximum: "{{ Arguments.MasterNodes }}"
          DesiredCapacity: "{{ Arguments.MasterNodes }}"
          SuccessRequires: "0 within 15m"
+      UpdatePolicy:
+        AutoScalingRollingUpdate:
+          SuspendProcesses:
+            - AZRebalance
       Tags:
         - Key: "KubernetesCluster"
           Value: kubernetes
@@ -88,35 +92,75 @@ SenzaComponents:
           Value: "{{ Arguments.ClusterID }}"
         - Key: "NodePool"
           Value: "{{ Arguments.MasterNodePoolName }}"
-  - WorkerAutoScaling:
-      Type: Senza::AutoScalingGroup
-      InstanceType: "{{ Arguments.InstanceType }}"
-      Image: LatestCoreOSImage
-      BlockDeviceMappings:
-        - DeviceName: /dev/xvda
-          Ebs:
-            VolumeSize: 50
-            VolumeType: standard
-      SecurityGroups:
-         - {Ref: WorkerSecurityGroup}
-      IamRoles:
-         - {Ref: WorkerIAMRole}
-      AssociatePublicIpAddress: true
-      UserData: "{{ Arguments.UserDataWorker }}"
-      AutoScaling:
-         Minimum: "{{ Arguments.MinimumWorkerNodes}}"
-         Maximum: "{{ Arguments.MaximumWorkerNodes}}"
-         DesiredCapacity: "{{ Arguments.WorkerNodes }}"
-         SuccessRequires: "1 within 15m"
+
+Resources:
+  WorkerAutoScaling:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    UpdatePolicy:
+      AutoScalingRollingUpdate:
+        SuspendProcesses:
+          - AZRebalance
+    CreationPolicy:
+      ResourceSignal:
+        Count: '1'
+        Timeout: PT15M
+    Properties:
+      MinSize: "{{ Arguments.MinimumWorkerNodes}}"
+      MaxSize: "{{ Arguments.MaximumWorkerNodes}}"
+      HealthCheckType: EC2
+      VPCZoneIdentifier:
+        "Fn::FindInMap": ["ServerSubnets", {Ref: "AWS::Region"}, "Subnets"]
+      DesiredCapacity: "{{ Arguments.WorkerNodes }}"
+      LaunchConfigurationName: {Ref: WorkerAutoScalingConfig}
+      HealthCheckGracePeriod: 300
       Tags:
         - Key: "KubernetesCluster"
           Value: kubernetes
+          PropagateAtLaunch: true
         - Key: "ClusterID"
           Value: "{{ Arguments.ClusterID }}"
+          PropagateAtLaunch: true
         - Key: "NodePool"
           Value: "{{ Arguments.WorkerNodePoolName }}"
+          PropagateAtLaunch: true
+  WorkerAutoScalingConfig:
+    Type: 'AWS::AutoScaling::LaunchConfiguration'
+    Properties:
+      AssociatePublicIpAddress: true
+      IamInstanceProfile: {Ref: WorkerAutoScalingInstanceProfile}
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeType: standard
+            VolumeSize: 50
+      UserData: "{{ Arguments.UserDataWorker }}"
+      EbsOptimized: false
+      InstanceType: "{{ Arguments.InstanceType }}"
+      ImageId:
+        "Fn::FindInMap": ["Images", {Ref: "AWS::Region"}, "LatestCoreOSImage"]
+      SecurityGroups:
+        - {Ref: WorkerSecurityGroup}
+  WorkerAutoScalingInstanceProfile:
+    Type: 'AWS::IAM::InstanceProfile'
+    Properties:
+      Path: /
+      Roles:
+        - {Ref: WorkerIAMRole}
+  WorkerAutoScalingScaleUp:
+    Type: 'AWS::AutoScaling::ScalingPolicy'
+    Properties:
+      ScalingAdjustment: '1'
+      AutoScalingGroupName: {Ref: WorkerAutoScaling}
+      Cooldown: '60'
+      AdjustmentType: ChangeInCapacity
+  WorkerAutoScalingScaleDown:
+    Type: 'AWS::AutoScaling::ScalingPolicy'
+    Properties:
+      ScalingAdjustment: '-1'
+      AutoScalingGroupName: {Ref: WorkerAutoScaling}
+      Cooldown: '60'
+      AdjustmentType: ChangeInCapacity
 
-Resources:
   MasterIAMRole:
     Properties:
       AssumeRolePolicyDocument:
