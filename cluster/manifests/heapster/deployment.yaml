@@ -23,7 +23,7 @@ spec:
       tolerations:
       - key: CriticalAddonsOnly
         operator: Exists
-      serviceAccountName: system
+      serviceAccountName: heapster
       containers:
         - image: gcr.io/google_containers/heapster:v1.4.0
           name: heapster

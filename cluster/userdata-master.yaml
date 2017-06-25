@@ -287,11 +287,14 @@ write_files:
           - --runtime-config=extensions/v1beta1/networkpolicies=true,batch/v2alpha1=true,extensions/v1beta1/podsecuritypolicy=true
           - --authentication-token-webhook-config-file=/etc/kubernetes/config/authn.yaml
           - --cloud-provider=aws
-          - --authorization-mode=Webhook
-          - --authorization-webhook-config-file=/etc/kubernetes/config/authz.yaml
+          - --authorization-mode=RBAC
+          # - --authorization-mode=RBAC,Webhook
+          # - --authorization-webhook-config-file=/etc/kubernetes/config/authz.yaml
           - --runtime-config=authorization.k8s.io/v1beta1=true
           - --feature-gates=AllAlpha=true
           - --anonymous-auth=false
+          # TODO: remove
+          - --audit-log-path=/etc/kubernetes/config/audit.log
           livenessProbe:
             httpGet:
               host: 127.0.0.1
@@ -315,7 +318,7 @@ write_files:
             readOnly: true
           - mountPath: /etc/kubernetes/config
             name: kubernetes-configs
-            readOnly: true
+            readOnly: false
           resources:
             requests:
               cpu: 100m
@@ -323,7 +326,7 @@ write_files:
             limits:
               cpu: 200m
               memory: 1Gi
-        - image: registry.opensource.zalan.do/teapot/k8s-authnz-webhook:v0.1.14
+        - image: mikkeloscar/k8s-authnz-webhook:v0.2.0-1-g5018157
           name: webhook
           ports:
           - containerPort: 8081
@@ -353,14 +356,44 @@ write_files:
               value: https://users.auth.zalando.com
             - name: CLUSTER_ID
               value: {{WEBHOOK_ID}}
-            - name: TOKENINFO_URL
-              value: https://info.services.auth.zalando.com/oauth2/tokeninfo
+            - name: TOKEN_INTROSPECTION_URL
+              value: http://127.0.0.1:9021/oauth2/introspect
             - name: USER_GROUPS
-              value: stups_autobahn=Administrator,stups_deployment-controller-ui=ReadOnly,credentials-provider=Administrator,credprov-kube-ops-view-read-only-token=ReadOnly,credprov-cluster-lifecycle-manager-cluster-rw-token=Administrator,credprov-cluster-lifecycle-manager-test-cluster-rw-token=Administrator,credprov-cdp-controller-cluster-token=PowerUser
+              value: stups_autobahn=Administrator,stups_deployment-controller-ui=ReadOnly,credentials-provider=Administrator,credprov-kube-ops-view-read-only-token=ReadOnly,credprov-cluster-lifecycle-manager-cluster-rw-token=system:masters,credprov-cluster-lifecycle-manager-test-cluster-rw-token=system:masters,credprov-cdp-controller-cluster-token=PowerUser
+            - name: BUSINESS_PARTNER_IDS
+              value: {{ APISERVER_BUSINESS_PARTNER_IDS }}
           volumeMounts:
           - mountPath: /etc/kubernetes/config
             name: kubernetes-configs
             readOnly: true
+        - image: registry.opensource.zalan.do/foundation/platform-iam-tokeninfo:4feeb5a
+          name: tokeninfo
+          ports:
+            - containerPort: 9021
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 9021
+            periodSeconds: 3
+            failureThreshold: 2
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 9021
+            periodSeconds: 3
+            failureThreshold: 2
+          resources:
+            limits:
+              cpu: 4000m
+              memory: 512Mi
+            requests:
+              cpu: 100m
+              memory: 20Mi
+          env:
+            - name: OPENID_PROVIDER_CONFIGURATION_URL
+              value: https://identity.zalando.com/.well-known/openid-configuration
+            - name: ENABLE_INTROSPECTION
+              value: "true"
         - name: nginx
           image: registry.opensource.zalan.do/teapot/nginx:1.11.5
           resources:
@@ -561,7 +594,7 @@ write_files:
   - path: /etc/kubernetes/config/tokenfile.csv
     content: |
       {{WORKER_SHARED_SECRET}},kubelet,kubelet
-      {{CONTROLLER_MANAGER_SECRET}},kube-controller-manager,kube-controller-manager
+      {{CONTROLLER_MANAGER_SECRET}},system:kube-controller-manager,system:kube-controller-manager
 
   - path: /etc/kubernetes/ssl/ca.pem
     encoding: gzip+base64
